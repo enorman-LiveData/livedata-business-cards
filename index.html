@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/opentype.js/1.3.4/opentype.min.js"></script>
 <style>
 :root {
   --violet-500: #7B71FA;
@@ -109,7 +110,6 @@ footer code { background: white; padding: 2px 6px; border: 1px solid var(--gray-
     </section>
   </div>
 
-  
 </main>
 
 <script>
@@ -143,6 +143,64 @@ footer code { background: white; padding: 2px 6px; border: 1px solid var(--gray-
     return measureEl.getComputedTextLength();
   }
 
+  // Load Inter as OTF so we can convert <text> → <path> on download.
+  // Once text is geometry, no font-size attribute matters; nothing for any renderer to strip.
+  let fontReg = null, fontSemi = null;
+  (async () => {
+    if (typeof opentype === 'undefined') return;
+    try {
+      const [r, s] = await Promise.all([
+        opentype.load('https://cdn.jsdelivr.net/gh/rsms/inter@v4.0/docs/font-files/Inter-Regular.otf'),
+        opentype.load('https://cdn.jsdelivr.net/gh/rsms/inter@v4.0/docs/font-files/Inter-SemiBold.otf')
+      ]);
+      fontReg = r; fontSemi = s;
+    } catch (e) {
+      console.warn('Inter OTF load failed; downloads will keep <text> elements (font-size dependent):', e);
+    }
+  })();
+
+  function convertTextToPaths(svgEl) {
+    if (!fontReg || !fontSemi) return false;
+    const texts = Array.from(svgEl.querySelectorAll('text'));
+    for (const t of texts) {
+      const weight = parseInt(t.getAttribute('font-weight') || '400', 10);
+      const font = weight >= 600 ? fontSemi : fontReg;
+      const size = parseFloat(t.getAttribute('font-size')) || 11;
+      const fill = t.getAttribute('fill') || '#000';
+      const ls = parseFloat(t.getAttribute('letter-spacing') || '0');
+      const anchor = t.getAttribute('text-anchor') || 'start';
+      const lsFrac = ls ? ls / size : 0;
+
+      const anchorX = (str, x) => {
+        if (anchor === 'start') return x;
+        const w = font.getAdvanceWidth(str, size, { letterSpacing: lsFrac });
+        return anchor === 'middle' ? x - w / 2 : x - w;
+      };
+
+      const d = [];
+      const tspans = t.querySelectorAll('tspan');
+      if (tspans.length) {
+        for (const ts of tspans) {
+          const tx = parseFloat(ts.getAttribute('x') || t.getAttribute('x') || '0');
+          const ty = parseFloat(ts.getAttribute('y') || t.getAttribute('y') || '0');
+          const str = ts.textContent;
+          d.push(font.getPath(str, anchorX(str, tx), ty, size, { letterSpacing: lsFrac }).toPathData(2));
+        }
+      } else {
+        const tx = parseFloat(t.getAttribute('x') || '0');
+        const ty = parseFloat(t.getAttribute('y') || '0');
+        const str = t.textContent;
+        d.push(font.getPath(str, anchorX(str, tx), ty, size, { letterSpacing: lsFrac }).toPathData(2));
+      }
+
+      const p = document.createElementNS(NS, 'path');
+      p.setAttribute('d', d.join(' '));
+      p.setAttribute('fill', fill);
+      t.parentNode.replaceChild(p, t);
+    }
+    return true;
+  }
+
   function syncText() {
     map.forEach(p => {
       document.getElementById(p[1]).textContent = document.getElementById(p[0]).value || '\u00A0';
@@ -154,7 +212,7 @@ footer code { background: white; padding: 2px 6px; border: 1px solid var(--gray-
     const oldEl = document.getElementById('c-name');
     if (!oldEl) return;
     const text = document.getElementById('f-name').value || '\u00A0';
-    const MAX_FONT = 22, MIN_SINGLE = 13, MAX_WIDTH = 200;
+    const MAX_FONT = 22, MIN_SINGLE = 10, MAX_WIDTH = 200;
 
     // Step 1: measure on offscreen SVG (layout is ready, value is reliable)
     const widthAtMax = measureNameWidth(text, MAX_FONT);
@@ -277,6 +335,9 @@ footer code { background: white; padding: 2px 6px; border: 1px solid var(--gray-
         if (cloneTspans[j]) syncAttrs(ltsp, cloneTspans[j]);
       });
     });
+
+    // Bake text to vector paths so font-size is geometry, not an interpretable attribute
+    convertTextToPaths(clone);
 
     const xml = '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(clone);
     const blob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });

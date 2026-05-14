@@ -109,9 +109,7 @@ footer code { background: white; padding: 2px 6px; border: 1px solid var(--gray-
     </section>
   </div>
 
-  <footer>
-    Pre-fill via URL: <code>?name=Cooper+Smith&amp;title=Sales+Director&amp;email=cooper@livedata.com&amp;phone=+1+617+555+0142&amp;linkedin=https://linkedin.com/in/cooper-smith</code>
-  </footer>
+
 </main>
 
 <script>
@@ -123,6 +121,28 @@ footer code { background: white; padding: 2px 6px; border: 1px solid var(--gray-
     if (v) document.getElementById('f-' + k).value = v;
   });
 
+  // Offscreen measurement SVG — permanently mounted so layout is always ready.
+  // Measuring on a freshly-inserted element returns 0 on mobile Safari before layout completes.
+  const NS = 'http://www.w3.org/2000/svg';
+  const measureSvg = document.createElementNS(NS, 'svg');
+  measureSvg.setAttribute('width', '500');
+  measureSvg.setAttribute('height', '60');
+  measureSvg.style.cssText = 'position:absolute;left:-9999px;top:-9999px;visibility:hidden;pointer-events:none;';
+  const measureEl = document.createElementNS(NS, 'text');
+  measureEl.setAttribute('x', '0');
+  measureEl.setAttribute('y', '40');
+  measureEl.setAttribute('font-family', 'Inter, system-ui, sans-serif');
+  measureEl.setAttribute('font-weight', '600');
+  measureEl.setAttribute('letter-spacing', '-0.5');
+  measureSvg.appendChild(measureEl);
+  document.body.appendChild(measureSvg);
+
+  function measureNameWidth(text, fontSize) {
+    measureEl.setAttribute('font-size', String(fontSize));
+    measureEl.textContent = text;
+    return measureEl.getComputedTextLength();
+  }
+
   function syncText() {
     map.forEach(p => {
       document.getElementById(p[1]).textContent = document.getElementById(p[0]).value || '\u00A0';
@@ -131,49 +151,66 @@ footer code { background: white; padding: 2px 6px; border: 1px solid var(--gray-
   }
 
   function fitName() {
-    const el = document.getElementById('c-name');
+    const oldEl = document.getElementById('c-name');
+    if (!oldEl) return;
     const text = document.getElementById('f-name').value || '\u00A0';
-    const MAX_FONT = 22, MIN_SINGLE = 14, MAX_WIDTH = 240;
-    const NS = 'http://www.w3.org/2000/svg';
+    const MAX_FONT = 22, MIN_SINGLE = 16, MAX_WIDTH = 220;
 
-    // Reset to single-line
-    while (el.firstChild) el.removeChild(el.firstChild);
-    el.appendChild(document.createTextNode(text));
-    el.setAttribute('y', 38);
-    el.setAttribute('font-size', MAX_FONT);
+    // Step 1: measure on offscreen SVG (layout is ready, value is reliable)
+    const widthAtMax = measureNameWidth(text, MAX_FONT);
 
-    const w = el.getComputedTextLength();
-    if (w <= MAX_WIDTH) return;
-
-    const scaled = MAX_FONT * MAX_WIDTH / w;
-    if (scaled >= MIN_SINGLE) {
-      el.setAttribute('font-size', scaled);
-      return;
+    // Step 2: decide layout off-DOM
+    let finalSize, useTwoLine = false, line1, line2;
+    if (widthAtMax <= MAX_WIDTH) {
+      finalSize = MAX_FONT;
+    } else {
+      const scaled = MAX_FONT * MAX_WIDTH / widthAtMax;
+      if (scaled >= MIN_SINGLE) {
+        finalSize = Math.round(scaled);
+      } else {
+        useTwoLine = true;
+        finalSize = MIN_SINGLE;
+        const splitIdx = findSplit(text);
+        line1 = text.slice(0, splitIdx).trim();
+        line2 = text.slice(splitIdx).trim();
+        const maxLineW = Math.max(
+          measureNameWidth(line1, MIN_SINGLE),
+          measureNameWidth(line2, MIN_SINGLE)
+        );
+        if (maxLineW > MAX_WIDTH) {
+          finalSize = Math.max(Math.round(MIN_SINGLE * MAX_WIDTH / maxLineW), 10);
+        }
+      }
     }
 
-    // Two-line mode: split at first comma, fall back to space nearest middle
-    const splitIdx = findSplit(text);
-    const line1 = text.slice(0, splitIdx).trim();
-    const line2 = text.slice(splitIdx).trim();
+    // Step 3: build final element off-DOM with locked-in font-size
+    const newEl = document.createElementNS(NS, 'text');
+    newEl.setAttribute('id', 'c-name');
+    newEl.setAttribute('x', '22');
+    newEl.setAttribute('font-family', 'Inter, system-ui, sans-serif');
+    newEl.setAttribute('font-weight', '600');
+    newEl.setAttribute('fill', '#111827');
+    newEl.setAttribute('letter-spacing', '-0.5');
+    newEl.setAttribute('font-size', String(finalSize));
 
-    while (el.firstChild) el.removeChild(el.firstChild);
-    const ts1 = document.createElementNS(NS, 'tspan');
-    ts1.setAttribute('x', 22);
-    ts1.textContent = line1;
-    const ts2 = document.createElementNS(NS, 'tspan');
-    ts2.setAttribute('x', 22);
-    ts2.setAttribute('dy', '1.1em');
-    ts2.textContent = line2;
-    el.appendChild(ts1);
-    el.appendChild(ts2);
-
-    el.setAttribute('y', 28);
-    el.setAttribute('font-size', MIN_SINGLE);
-
-    const maxLine = Math.max(ts1.getComputedTextLength(), ts2.getComputedTextLength());
-    if (maxLine > MAX_WIDTH) {
-      el.setAttribute('font-size', Math.max(MIN_SINGLE * MAX_WIDTH / maxLine, 10));
+    if (useTwoLine) {
+      const ts1 = document.createElementNS(NS, 'tspan');
+      ts1.setAttribute('x', '22');
+      ts1.setAttribute('y', '28');
+      ts1.textContent = line1;
+      const ts2 = document.createElementNS(NS, 'tspan');
+      ts2.setAttribute('x', '22');
+      ts2.setAttribute('y', '44');
+      ts2.textContent = line2;
+      newEl.appendChild(ts1);
+      newEl.appendChild(ts2);
+    } else {
+      newEl.setAttribute('y', '38');
+      newEl.appendChild(document.createTextNode(text));
     }
+
+    // Step 4: atomic swap
+    oldEl.parentNode.replaceChild(newEl, oldEl);
   }
 
   function findSplit(t) {
@@ -217,9 +254,30 @@ footer code { background: white; padding: 2px 6px; border: 1px solid var(--gray-
     document.fonts.ready.then(fitName);
   }
 
+  function syncAttrs(live, clone) {
+    // Wipe clone attrs, copy from live — guarantees serialized output matches live DOM
+    const cloneAttrs = Array.from(clone.attributes);
+    for (const a of cloneAttrs) clone.removeAttribute(a.name);
+    for (const a of live.attributes) clone.setAttribute(a.name, a.value);
+  }
+
   function downloadSVG(svg, filename) {
     const clone = svg.cloneNode(true);
     clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+
+    // Force-sync every text + tspan attribute from live → clone before serializing
+    const liveTexts = svg.querySelectorAll('text');
+    const cloneTexts = clone.querySelectorAll('text');
+    liveTexts.forEach((lt, i) => {
+      if (!cloneTexts[i]) return;
+      syncAttrs(lt, cloneTexts[i]);
+      const liveTspans = lt.querySelectorAll('tspan');
+      const cloneTspans = cloneTexts[i].querySelectorAll('tspan');
+      liveTspans.forEach((ltsp, j) => {
+        if (cloneTspans[j]) syncAttrs(ltsp, cloneTspans[j]);
+      });
+    });
+
     const xml = '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(clone);
     const blob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });
     const url = URL.createObjectURL(blob);
